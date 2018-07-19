@@ -23,10 +23,10 @@ parameters {
   // parameters to estimate in the model
   real intercept; // population intercept 
   real slope; // population slope
-  real<lower=0> sigmaRan1; // random effect standard deviation for group 1
-  real<lower=0> sigmaRan2; // random effect standard deviation for group 2
-  real<lower=0> sigmaRanSlope1; // random effect slope standard deviation for group 3
-  real<lower=1, upper=1000> iSize; // size parameter for the nb distribution
+  real<lower=0.02> sigmaRan1; // random effect standard deviation for group 1
+  real<lower=0.02> sigmaRan2; // random effect standard deviation for group 2
+  real<lower=0.02> sigmaRanSlope1; // random effect slope standard deviation for group 3
+  real<lower=1, upper=100> iSize; // size parameter for the nb distribution
   vector[Nclusters1] rGroupsJitter1; // number of random jitters for each level of cluster/group 1
   vector[Nclusters2] rGroupsJitter2; // number of random jitters for each level of cluster/group 2
   vector[Nclusters3] rGroupsSlope3; // number of random slope jitters for each level of cluster/group 3
@@ -34,13 +34,13 @@ parameters {
 transformed parameters {
   vector[Ntotal] mu; // fitted values from linear predictor
   vector[Ntotal] newSlope; // expanded slope vector after adding the random slope jitters
-  newSlope = slope + rGroupsSlope3[NgroupMap3];
+  newSlope = slope + (rGroupsSlope3[NgroupMap3] * sigmaRanSlope1);
   // calculate the new fitted values after multiplication of predictor with slope coefficient
   for (i in 1:Ntotal){
     mu[i] = X[i] * newSlope[i];
   }
   // log link inverse i.e. exp
-  mu = mu + intercept + rGroupsJitter1[NgroupMap1] + rGroupsJitter2[NgroupMap2];
+  mu = mu + intercept + (rGroupsJitter1[NgroupMap1]*sigmaRan1) + (rGroupsJitter2[NgroupMap2]*sigmaRan2);
   mu = exp(mu);
 }
 model {
@@ -50,9 +50,9 @@ model {
   intercept ~ normal(intercept_mean, intercept_sd);
   slope ~ normal(slope_mean, slope_sd);
   // random effects sample
-  rGroupsJitter1 ~ normal(0, sigmaRan1);
-  rGroupsJitter2 ~ normal(0, sigmaRan2);
-  rGroupsSlope3 ~ normal(0, sigmaRanSlope1);
+  rGroupsJitter1 ~ normal(0, 1);
+  rGroupsJitter2 ~ normal(0, 1);
+  rGroupsSlope3 ~ normal(0, 1);
   // likelihood function
   y ~ neg_binomial_2(mu, iSize);
 }
