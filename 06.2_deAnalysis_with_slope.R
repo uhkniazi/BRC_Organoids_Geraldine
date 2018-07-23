@@ -79,13 +79,14 @@ dfData = droplevels.data.frame(dfData)
 dfData = dfData[order(dfData$Coef, dfData$Coef.adj1), ]
 str(dfData)
 
-# # ## setup the model
+# ## setup the model
 # library(lme4)
-# fit.lme1 = glmer.nb(values ~ 1  + (1 | Coef) + (1 | Coef.adj1), data=dfData)
+# fit.lme1 = glmer.nb(values ~ 1  + time + (1 | Coef) + (1 | Coef.adj1) + (0 + time | ind), data=dfData)
 # summary(fit.lme1)
-# fit.lme2 = glmer.nb(values ~ 1 + fAdjust1 + (1 | Coef), data=dfData)
+# fit.lme2 = glmer.nb(values ~ 1 + time + (1 | Coef) + (1 | Coef.adj1), data=dfData)
 # summary(fit.lme2)
-# fit.lme3 = glmer.nb(values ~ 1 + (1 | Coef), data=dfData)
+# fit.lme3 = glmer.nb(values ~ 1 + (1 | Coef) + (1 | Coef.adj1) + (0 + time | ind), data=dfData)
+# summary(fit.lme3)
 # 
 # anova(fit.lme1, fit.lme2, fit.lme3)
 # 
@@ -100,7 +101,7 @@ library(rstan)
 rstan_options(auto_write = TRUE)
 options(mc.cores = parallel::detectCores())
 
-stanDso = rstan::stan_model(file='nbinomResp2RandomEffects.stan')
+stanDso = rstan::stan_model(file='nbinomResp2RandomIntercepts1RandomSlope.stan')
 
 # library(MASS)
 # s = max(1, fitdistr(dfData$values, 'negative binomial')$estimate['size'])
@@ -112,47 +113,49 @@ l = gammaShRaFromModeSD(sd(log(dfData$values+0.5)), 2*sd(log(dfData$values+0.5))
 # r2 = ran$Coef.adj1
 # r3 = ran$Coef.adj2
 # 
-# r1 = rep(0, times=nlevels(dfData$Coef))
-# r2 = rep(0, times=nlevels(dfData$Coef.adj1))
-# #r3 = rep(0, times=nlevels(dfData$ind))
-# initf = function(chain_id = 1) {
-#   list(sigmaRan1 = 0.1, sigmaRan2=2, #rGroupsJitter1=r1, rGroupsJitter2=r2,
-#        iSize=8)
-# }
+r1 = rep(0, times=nlevels(dfData$Coef))
+r2 = rep(0, times=nlevels(dfData$Coef.adj1))
+r3 = rep(0, times=nlevels(dfData$ind))
+initf = function(chain_id = 1) {
+  list(sigmaRan1 = 1, sigmaRan2=1, sigmaRanSlope1=1, rGroupsJitter1=r1, rGroupsJitter2=r2,
+       rGroupsSlope3=r3, iSize=8, intercept=5, slope=0)
+}
 
 ### try a t model without mixture
 lStanData = list(Ntotal=nrow(dfData), Nclusters1=nlevels(dfData$Coef),
                  Nclusters2=nlevels(dfData$Coef.adj1),
+                 Nclusters3=nlevels(dfData$ind),
                  NgroupMap1=as.numeric(dfData$Coef),
                  NgroupMap2=as.numeric(dfData$Coef.adj1),
-                 Ncol=1,
+                 NgroupMap3=as.numeric(dfData$ind),
+                 X = dfData$time,
                  y=dfData$values, 
                  gammaShape=l$shape, gammaRate=l$rate,
-                 intercept = mean(log(dfData$values+0.5)), intercept_sd= sd(log(dfData$values+0.5))*2)
-                 
+                 intercept_mean = mean(log(dfData$values+0.5)), intercept_sd= sd(log(dfData$values+0.5))*1,
+                 slope_mean = 0, slope_sd=1)
 
-fit.stan = sampling(stanDso, data=lStanData, iter=2000, chains=6, 
-                    pars=c('sigmaRan1', 'sigmaRan2', 'betas', 
+fit.stan = sampling(stanDso, data=lStanData, iter=1000, chains=6, 
+                    pars=c('sigmaRan1', 'sigmaRan2', 'sigmaRanSlope1', 'intercept', 'slope',
                            'iSize',  
                            'rGroupsJitter1', 
-                           'rGroupsJitter2'
-                           ),
-                    cores=6)#, init=initf)#, control=list(adapt_delta=0.99, max_treedepth = 15))
-#save(fit.stan, file='temp/fit.stan.nb_noslope_19july.rds')
+                           'rGroupsJitter2',
+                           'rGroupsSlope3'),
+                    cores=6, init=initf)#, control=list(adapt_delta=0.99, max_treedepth = 15))
+save(fit.stan, file='temp/fit.stan.nb_17july.rds')
 
-print(fit.stan, c('betas', 'sigmaRan1', 'sigmaRan2', 'iSize'), digits=3)
-traceplot(fit.stan, c('betas'))
+print(fit.stan, c('intercept', 'slope', 'sigmaRan1', 'sigmaRan2', 'sigmaRanSlope1', 'iSize'), digits=3)
+traceplot(fit.stan, c('intercept', 'slope'))
 traceplot(fit.stan, 'sigmaRan1')
-traceplot(fit.stan, 'sigmaRan2')
-#print(fit.stan, 'rGroupsJitter1')
+traceplot(fit.stan, 'sigmaRanSlope1')
+print(fit.stan, 'rGroupsJitter1')
 
 ## get the coefficient of interest - Modules in our case from the random coefficients section
 mCoef = extract(fit.stan)$rGroupsJitter1
 dim(mCoef)
 # ## get the intercept at population level
-#iIntercept = as.numeric(extract(fit.stan)$intercept)
+iIntercept = as.numeric(extract(fit.stan)$intercept)
 ## add the intercept to each random effect variable, to get the full coefficient
-#mCoef = sweep(mCoef, 1, iIntercept, '+')
+mCoef = sweep(mCoef, 1, iIntercept, '+')
 
 ## function to calculate statistics for differences between coefficients
 getDifference = function(ivData, ivBaseline){
@@ -216,74 +219,21 @@ identical(names(m), rownames(dfResults))
 plotMeanFC(log(m), dfResults, 0.01, 'TNFa vs Control')
 table(dfResults$pvalue < 0.05)
 ## save the results 
-write.csv(dfResults, file='results/DEAnalysisILC3VsSIO.xls')
+write.csv(dfResults, file='results/DEAnalysisTNFaVsControl.xls')
 
 
 
 ######### do a comparison with deseq2
-f = factor(dfSample$group1)
-f = relevel(f, 'SIO')
-dfDesign = data.frame(Treatment = f, fAdjust1 = factor(dfSample$group3),
+dfDesign = data.frame(Treatment = dfSample$group1, fAdjust1 = dfSample$group3, fAdjust2 = as.numeric(dfSample$group2),
                       row.names=colnames(mData))
 
 oDseq = DESeqDataSetFromMatrix(mData, dfDesign, design = ~ Treatment + fAdjust1 )
 oDseq = DESeq(oDseq)
 plotDispEsts(oDseq)
-resultsNames(oDseq)
-oRes = results(oDseq, contrast=c('Treatment', 'ILC1', 'SIO'))
-plotMA(oRes)
+oRes = results(oDseq, contrast=c('Treatment', 'ILC3', 'SIO'))
 temp = as.data.frame(oRes)
 i = match((dfResults$ind), rownames(temp))
 temp = temp[i,]
 identical((dfResults$ind), rownames(temp))
 plot(dfResults$logFC, temp$log2FoldChange, pch=20)
 table(oRes$padj < 0.01)
-write.csv(temp, file='results/DEAnalysisILC3VsSIO_Deseq2.xls')
-
-
-################################ section for edge R
-library(edgeR)
-
-oEdge = DGEList(mData)
-# mCpm = cpm(oEdge)
-# fKeep = rowMeans(mCpm) > 1
-# table(fKeep)
-# oEdge = DGEList(exprs(oExp)[fKeep,], group=fCondition)
-## remove low counts
-oEdge = oEdge[rowSums(1e+06 * oEdge$counts/expandAsMatrix(oEdge$samples$lib.size, dim(oEdge)) > 1) >= 3, ]
-dim(oEdge)
-oEdge = calcNormFactors(oEdge)
-
-f = factor(dfSample$group1)
-fCondition = relevel(f, 'SIO')
-fAdjust1 = factor(dfSample$group3)
-
-
-mModMatrix = model.matrix(~ fCondition + fAdjust1)
-colnames(mModMatrix)
-#oEdge = estimateDisp(oEdge, mModMatrix, )
-oEdge = estimateCommonDisp(oEdge)
-oEdge = estimateTagwiseDisp(oEdge, prior.df = 1)
-oEdge.glm = glmFit(oEdge, mModMatrix)
-oLrt = glmLRT(oEdge.glm, coef=4)
-
-temp = oLrt$table
-table(temp$PValue < 0.01)
-temp$padj = p.adjust(temp$PValue, method='BH')
-table(temp$padj < 0.1)
-dim(temp)
-write.csv(temp, file='results/DEAnalysisILC3VsSIO_EdgeR.xls')
-temp = temp[rownames(temp) %in% dfResults$ind, ]
-dim(temp)
-i = match((dfResults$ind), rownames(temp))
-temp = temp[i,]
-identical((dfResults$ind), rownames(temp))
-plot(dfResults$logFC, temp$logFC, pch=20)
-
-
-# cCont = sprintf("%s-%s", "CLP_SI", "SI_compM") # Samples to be compared
-# oContrast = makeContrasts(contrasts=cCont, levels=mModMatrix) # Make contrast
-# oRes = glmLRT(oEdge, contrast = oContrast)
-# oRes$table$QValue = p.adjust(oRes$table$PValue, method = "BH")
-# 
-# dfRes = oRes$table
