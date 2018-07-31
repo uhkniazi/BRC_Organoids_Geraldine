@@ -53,14 +53,36 @@ tail(rownames(mData))
 i = grep('ERCC', x = rownames(mData))
 mData = mData[-i,]
 
+## remove drop outs
+ivProb = apply(mData, 1, function(inData) {
+  inData[is.na(inData) | !is.finite(inData)] = 0
+  inData = as.logical(inData)
+  lData = list('success'=sum(inData), fail=sum(!inData))
+  return(mean(rbeta(1000, lData$success + 0.5, lData$fail + 0.5)))
+})
+
+table(ivProb < 0.8)
+
+mData = mData[!(ivProb < 0.8), ]
+dim(mData)
+
 library(DESeq2)
 sf = estimateSizeFactorsForMatrix(mData)
 mData.norm = sweep(mData, 2, sf, '/')
 dim(mData.norm)
 str(mData.norm)
+
+## create a new factor for outlier
+i = grep('188$', dfSample$title)
+fNewBatch = rep(1, times=length(dfSample$title))
+fNewBatch[i] = 2
+fNewBatch = factor(fNewBatch)
+dfSample$fNewBatch = fNewBatch
+
 ## perform DE analysis
 ## delete sample section after testing
 mData.norm = round(mData.norm, 0)
+hist(mData.norm)
 #set.seed(123)
 # i = sample(1:nrow(mData.norm), 100, replace = F)
 # dfData = data.frame(t(mData.norm[i,]))
@@ -70,30 +92,43 @@ dfData = stack(dfData)
 dim(dfData)
 dfData$fBatch = factor(dfSample$group1)
 dfData$fAdjust1 = factor(dfSample$group3)
-dfData$time = as.numeric(dfSample$group2)
+dfData$fAdjust2 = dfSample$fNewBatch
 dfData$Coef = factor(dfData$fBatch:dfData$ind)
 dfData$Coef.adj1 = factor(dfData$fAdjust1:dfData$ind)
+dfData$Coef.adj2 = factor(dfData$fAdjust2:dfData$ind)
 ## adjust the time as a continuous variable in each ind/gene
 dim(dfData)
 dfData = droplevels.data.frame(dfData)
-dfData = dfData[order(dfData$Coef, dfData$Coef.adj1), ]
+dfData = dfData[order(dfData$Coef, dfData$Coef.adj1, dfData$Coef.adj2), ]
 str(dfData)
 
-# # ## setup the model
+# # # ## setup the model
 # library(lme4)
-# fit.lme1 = glmer.nb(values ~ 1  + (1 | Coef) + (1 | Coef.adj1), data=dfData)
+# fit.lme1 = glmer.nb(values ~ 1  + (1 | Coef) + (1 | Coef.adj1) + (1 | Coef.adj2), data=dfData)
 # summary(fit.lme1)
-# fit.lme2 = glmer.nb(values ~ 1 + fAdjust1 + (1 | Coef), data=dfData)
+# fit.lme2 = glmer.nb(values ~ 1 + (1 | Coef) + (1 | Coef.adj1), data=dfData)
 # summary(fit.lme2)
-# fit.lme3 = glmer.nb(values ~ 1 + (1 | Coef), data=dfData)
+# fit.lme3 = glmer.nb(values ~ 1 + (1 | Coef) + (1 | Coef.adj2), data=dfData)
+# summary(fit.lme3)
+# fit.lme4 = glmer.nb(values ~ 1 + (1 | Coef), data=dfData)
+# summary(fit.lme4)
 # 
-# anova(fit.lme1, fit.lme2, fit.lme3)
+# anova(fit.lme1, fit.lme2, fit.lme3, fit.lme4)
 # 
-# ran = ranef(fit.lme1, condVar=F)
+# ran = ranef(fit.lme3, condVar=F)
 # 
-# plot(log(fitted(fit.lme1)), resid(fit.lme1), pch=20, cex=0.7)
-# lines(lowess(log(fitted(fit.lme1)), resid(fit.lme1)), col=2)
-# plot(log(fitted(fit.lme1)), resid(fit.lme1, type='pearson'), pch=20, cex=0.7)
+# plot((fitted(fit.lme3)), resid(fit.lme3), pch=20, cex=0.7)
+# lines(lowess((fitted(fit.lme3)), resid(fit.lme3)), col=2)
+# plot(density(dfData$values))
+# lines(density(fitted(fit.lme1)))
+# lines(density(fitted(fit.lme2)))
+# lines(density(fitted(fit.lme3)))
+# lines(density(fitted(fit.lme4)))
+# 
+# plot(resid(fit.lme3), dfData$fBatch)
+# plot(resid(fit.lme3), dfData$fAdjust1)
+# plot(resid(fit.lme3), dfData$fAdjust2)
+# plot(resid(fit.lme3), dfData$ind)
 
 ## setup the stan model
 library(rstan)
@@ -123,27 +158,33 @@ l = gammaShRaFromModeSD(sd(log(dfData$values+0.5)), 2*sd(log(dfData$values+0.5))
 ### try a t model without mixture
 lStanData = list(Ntotal=nrow(dfData), Nclusters1=nlevels(dfData$Coef),
                  Nclusters2=nlevels(dfData$Coef.adj1),
+                 Nclusters3=nlevels(dfData$Coef.adj2),
+                 Nsizes = nlevels(dfData$ind),
                  NgroupMap1=as.numeric(dfData$Coef),
                  NgroupMap2=as.numeric(dfData$Coef.adj1),
+                 NgroupMap3=as.numeric(dfData$Coef.adj2),
+                 NsizeMap=as.numeric(dfData$ind),
                  Ncol=1,
                  y=dfData$values, 
                  gammaShape=l$shape, gammaRate=l$rate,
                  intercept = mean(log(dfData$values+0.5)), intercept_sd= sd(log(dfData$values+0.5))*2)
                  
 
-fit.stan = sampling(stanDso, data=lStanData, iter=2000, chains=6, 
-                    pars=c('sigmaRan1', 'sigmaRan2', 'betas', 
-                           'iSize',  
-                           'rGroupsJitter1', 
-                           'rGroupsJitter2'
-                           ),
-                    cores=6)#, init=initf)#, control=list(adapt_delta=0.99, max_treedepth = 15))
-#save(fit.stan, file='temp/fit.stan.nb_noslope_19july.rds')
+#' fit.stan = sampling(stanDso, data=lStanData, iter=1500, chains=6, 
+#'                     pars=c('sigmaRan1', 'sigmaRan2', 'sigmaRan3', 'betas', 
+#'                            'iSize',  
+#'                            'rGroupsJitter1'#, 
+#'                            #'rGroupsJitter2',
+#'                            #'rGroupsJitter3',
+#'                            #'mu'
+#'                            ),
+#'                     cores=6)#, init=initf)#, control=list(adapt_delta=0.99, max_treedepth = 15))
+#' save(fit.stan, file='temp/fit.stan.nb_noslope_26july.rds')
 
-print(fit.stan, c('betas', 'sigmaRan1', 'sigmaRan2', 'iSize'), digits=3)
+print(fit.stan, c('betas', 'sigmaRan2', 'sigmaRan3'), digits=3)
 traceplot(fit.stan, c('betas'))
-traceplot(fit.stan, 'sigmaRan1')
 traceplot(fit.stan, 'sigmaRan2')
+traceplot(fit.stan, 'sigmaRan3')
 #print(fit.stan, 'rGroupsJitter1')
 
 ## get the coefficient of interest - Modules in our case from the random coefficients section
@@ -179,7 +220,7 @@ levels(d$fBatch)
 ## repeat this for each comparison
 
 ## get a p-value for each comparison
-l = tapply(d$cols, d$split, FUN = function(x, base='SIO', deflection='ILC3') {
+l = tapply(d$cols, d$split, FUN = function(x, base='SIO', deflection='ILC1') {
   c = x
   names(c) = as.character(d$fBatch[c])
   dif = getDifference(ivData = mCoef[,c[deflection]], ivBaseline = mCoef[,c[base]])
@@ -207,26 +248,28 @@ df = df[i,]
 dfResults$SYMBOL = df$SYMBOL
 identical(dfResults$ind, df$ENTREZID)
 ## produce the plots 
-f_plotVolcano(dfResults, 'ILC2 vs SIO', fc.lim=c(-2.5, 2.5))
+f_plotVolcano(dfResults, 'Bayes: ILC1 vs SIO', fc.lim=c(-2.5, 2.5))
 
 m = tapply(dfData$values, dfData$ind, mean)
 i = match(rownames(dfResults), names(m))
 m = m[i]
 identical(names(m), rownames(dfResults))
-plotMeanFC(log(m), dfResults, 0.01, 'TNFa vs Control')
+plotMeanFC(log(m), dfResults, 0.1, 'TNFa vs Control')
 table(dfResults$pvalue < 0.05)
+table(dfResults$adj.P.Val < 0.05)
 ## save the results 
-write.csv(dfResults, file='results/DEAnalysisILC3VsSIO.xls')
+write.csv(dfResults, file='results/DEAnalysisILC1VsSIO.xls')
 
 
 
 ######### do a comparison with deseq2
 f = factor(dfSample$group1)
 f = relevel(f, 'SIO')
-dfDesign = data.frame(Treatment = f, fAdjust1 = factor(dfSample$group3),
+dfDesign = data.frame(Treatment = f, fAdjust1 = factor(dfSample$group3), fAdjust2=dfSample$fNewBatch,
                       row.names=colnames(mData))
 
-oDseq = DESeqDataSetFromMatrix(mData, dfDesign, design = ~ Treatment + fAdjust1 )
+str(dfDesign)
+oDseq = DESeqDataSetFromMatrix(mData, dfDesign, design = ~ Treatment + fAdjust1 + fAdjust2)
 oDseq = DESeq(oDseq)
 plotDispEsts(oDseq)
 resultsNames(oDseq)
@@ -236,10 +279,27 @@ temp = as.data.frame(oRes)
 i = match((dfResults$ind), rownames(temp))
 temp = temp[i,]
 identical((dfResults$ind), rownames(temp))
-plot(dfResults$logFC, temp$log2FoldChange, pch=20)
-table(oRes$padj < 0.01)
-write.csv(temp, file='results/DEAnalysisILC3VsSIO_Deseq2.xls')
+plot(dfResults$logFC, temp$log2FoldChange, pch=20, main='ILC1: DEseq2 vs Bayes', xlab='Bayes', ylab='DEseq2')
+table(oRes$padj < 0.05)
+write.csv(temp, file='results/DEAnalysisILC1VsSIO_Deseq2.xls')
 
+
+#### plot the deseq2 volcano plot
+dfResults = temp
+dfResults$logFC = log(2^dfResults$log2FoldChange)
+dfResults$P.Value = dfResults$pvalue
+dfResults$adj.P.Val = dfResults$padj
+head(rownames(dfResults))
+## remove X from annotation names
+dfResults$ind = rownames(dfResults)
+
+df = AnnotationDbi::select(org.Mm.eg.db, keys = as.character(dfResults$ind), columns = 'SYMBOL', keytype = 'ENTREZID')
+i = match(dfResults$ind, df$ENTREZID)
+df = df[i,]
+dfResults$SYMBOL = df$SYMBOL
+identical(dfResults$ind, df$ENTREZID)
+## produce the plots 
+f_plotVolcano(dfResults, 'DEseq2: ILC1 vs SIO', fc.lim=c(-2.5, 2.5))
 
 ################################ section for edge R
 library(edgeR)
