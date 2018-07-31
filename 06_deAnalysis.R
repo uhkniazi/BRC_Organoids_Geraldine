@@ -220,7 +220,7 @@ levels(d$fBatch)
 ## repeat this for each comparison
 
 ## get a p-value for each comparison
-l = tapply(d$cols, d$split, FUN = function(x, base='SIO', deflection='ILC1') {
+l = tapply(d$cols, d$split, FUN = function(x, base='SIO', deflection='ILC3') {
   c = x
   names(c) = as.character(d$fBatch[c])
   dif = getDifference(ivData = mCoef[,c[deflection]], ivBaseline = mCoef[,c[base]])
@@ -248,17 +248,17 @@ df = df[i,]
 dfResults$SYMBOL = df$SYMBOL
 identical(dfResults$ind, df$ENTREZID)
 ## produce the plots 
-f_plotVolcano(dfResults, 'Bayes: ILC1 vs SIO', fc.lim=c(-2.5, 2.5))
+f_plotVolcano(dfResults, 'Bayes: ILC3 vs SIO', fc.lim=c(-3.5, 6.5))
 
 m = tapply(dfData$values, dfData$ind, mean)
 i = match(rownames(dfResults), names(m))
 m = m[i]
 identical(names(m), rownames(dfResults))
-plotMeanFC(log(m), dfResults, 0.1, 'TNFa vs Control')
+plotMeanFC(log(m), dfResults, 0.1, '')
 table(dfResults$pvalue < 0.05)
 table(dfResults$adj.P.Val < 0.05)
 ## save the results 
-write.csv(dfResults, file='results/DEAnalysisILC1VsSIO.xls')
+write.csv(dfResults, file='results/DEAnalysisILC3VsSIO.xls')
 
 
 
@@ -273,15 +273,15 @@ oDseq = DESeqDataSetFromMatrix(mData, dfDesign, design = ~ Treatment + fAdjust1 
 oDseq = DESeq(oDseq)
 plotDispEsts(oDseq)
 resultsNames(oDseq)
-oRes = results(oDseq, contrast=c('Treatment', 'ILC1', 'SIO'))
+oRes = results(oDseq, contrast=c('Treatment', 'ILC3', 'SIO'))
 plotMA(oRes)
 temp = as.data.frame(oRes)
 i = match((dfResults$ind), rownames(temp))
 temp = temp[i,]
 identical((dfResults$ind), rownames(temp))
-plot(dfResults$logFC, temp$log2FoldChange, pch=20, main='ILC1: DEseq2 vs Bayes', xlab='Bayes', ylab='DEseq2')
+plot(dfResults$logFC, temp$log2FoldChange, pch=20, main='ILC3: DEseq2 vs Bayes', xlab='Bayes', ylab='DEseq2')
 table(oRes$padj < 0.05)
-write.csv(temp, file='results/DEAnalysisILC1VsSIO_Deseq2.xls')
+write.csv(temp, file='results/DEAnalysisILC3VsSIO_Deseq2.xls')
 
 
 #### plot the deseq2 volcano plot
@@ -299,51 +299,5 @@ df = df[i,]
 dfResults$SYMBOL = df$SYMBOL
 identical(dfResults$ind, df$ENTREZID)
 ## produce the plots 
-f_plotVolcano(dfResults, 'DEseq2: ILC1 vs SIO', fc.lim=c(-2.5, 2.5))
+f_plotVolcano(dfResults, 'DEseq2: ILC3 vs SIO', fc.lim=c(-4.5, 7))
 
-################################ section for edge R
-library(edgeR)
-
-oEdge = DGEList(mData)
-# mCpm = cpm(oEdge)
-# fKeep = rowMeans(mCpm) > 1
-# table(fKeep)
-# oEdge = DGEList(exprs(oExp)[fKeep,], group=fCondition)
-## remove low counts
-oEdge = oEdge[rowSums(1e+06 * oEdge$counts/expandAsMatrix(oEdge$samples$lib.size, dim(oEdge)) > 1) >= 3, ]
-dim(oEdge)
-oEdge = calcNormFactors(oEdge)
-
-f = factor(dfSample$group1)
-fCondition = relevel(f, 'SIO')
-fAdjust1 = factor(dfSample$group3)
-
-
-mModMatrix = model.matrix(~ fCondition + fAdjust1)
-colnames(mModMatrix)
-#oEdge = estimateDisp(oEdge, mModMatrix, )
-oEdge = estimateCommonDisp(oEdge)
-oEdge = estimateTagwiseDisp(oEdge, prior.df = 1)
-oEdge.glm = glmFit(oEdge, mModMatrix)
-oLrt = glmLRT(oEdge.glm, coef=4)
-
-temp = oLrt$table
-table(temp$PValue < 0.01)
-temp$padj = p.adjust(temp$PValue, method='BH')
-table(temp$padj < 0.1)
-dim(temp)
-write.csv(temp, file='results/DEAnalysisILC3VsSIO_EdgeR.xls')
-temp = temp[rownames(temp) %in% dfResults$ind, ]
-dim(temp)
-i = match((dfResults$ind), rownames(temp))
-temp = temp[i,]
-identical((dfResults$ind), rownames(temp))
-plot(dfResults$logFC, temp$logFC, pch=20)
-
-
-# cCont = sprintf("%s-%s", "CLP_SI", "SI_compM") # Samples to be compared
-# oContrast = makeContrasts(contrasts=cCont, levels=mModMatrix) # Make contrast
-# oRes = glmLRT(oEdge, contrast = oContrast)
-# oRes$table$QValue = p.adjust(oRes$table$PValue, method = "BH")
-# 
-# dfRes = oRes$table
