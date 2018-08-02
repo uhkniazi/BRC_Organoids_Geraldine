@@ -90,7 +90,7 @@ pdf('results/matrixClustering.pdf')
 
 ## compare the 2 methods using various plots
 par(mfrow=c(1,2))
-boxplot.median.summary(oDiag.1, fBatch, legend.pos = 'topright', axis.label.cex = 0.7)
+boxplot.median.summary(oDiag.1, fBatch, legend.pos = 'center', axis.label.cex = 0.7)
 boxplot.median.summary(oDiag.2, fBatch, legend.pos = 'topright', axis.label.cex = 0.7)
 
 plot.mean.summary(oDiag.1, fBatch, axis.label.cex = 0.7)
@@ -118,7 +118,7 @@ oDiag.2 = CDiagnosticPlotsSetParameters(oDiag.2, l)
 plot.PCA(oDiag.1, fBatch)
 plot.PCA(oDiag.2, fBatch)
 plot.PCA(oDiag.1, fBatch, csLabels = dfSample$group3)
-plot.dendogram(oDiag.1, fBatch, labels_cex = 0.7)
+plot.dendogram(oDiag.1, fBatch, labels_cex = 0.6)
 plot.dendogram(oDiag.2, fBatch, labels_cex = 0.7)
 
 # ## extreme values
@@ -170,6 +170,48 @@ str(dfData)
 
 fit.lme1 = lmer(values ~ 1  + (1 | Coef) + (1 | Coef.adj1) + (1 | Coef.adj2), data=dfData)
 summary(fit.lme1)
+
+## fit model with stan
+library(rstan)
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+stanDso = rstan::stan_model(file='tResponse3RandomEffectsNoFixed.stan')
+
+
+### try a t model without mixture
+lStanData = list(Ntotal=nrow(dfData), Nclusters1=nlevels(dfData$Coef),
+                 Nclusters2=nlevels(dfData$Coef.adj1),
+                 Nclusters3=nlevels(dfData$Coef.adj2),
+                 NgroupMap1=as.numeric(dfData$Coef),
+                 NgroupMap2=as.numeric(dfData$Coef.adj1),
+                 NgroupMap3=as.numeric(dfData$Coef.adj2),
+                 y=dfData$values, 
+                 gammaShape=0.5, gammaRate=1e-4)
+
+fit.stan = sampling(stanDso, data=lStanData, iter=10000, chains=4,
+                    pars=c('betas', 'sigmaRan1', 'sigmaRan2', 'sigmaRan3',
+                           'nu', 'sigmaPop', 'mu',
+                           'rGroupsJitter1', 'rGroupsJitter2', 'rGroupsJitter3'),
+                    cores=4)#, init=initf, control=list(adapt_delta=0.99, max_treedepth = 12))
+
+print(fit.stan, c('betas', 'sigmaRan1', 'sigmaRan2', 'sigmaRan3', 'sigmaPop', 'nu'), digits=3)
+traceplot(fit.stan, 'betas')
+traceplot(fit.stan, 'sigmaRan2')
+
+m = cbind(extract(fit.stan)$sigmaRan1, extract(fit.stan)$sigmaRan2, extract(fit.stan)$sigmaRan3) 
+dim(m)
+m = log(m)
+colnames(m) = c('Treatment', 'BioRep', 'Outlier')
+
+library(lattice)
+df = stack(data.frame(m))
+histogram(~ values | ind, data=df, xlab='Log SD')
+## 
+
+fit.lme2 = lmer(values ~ 1  + Coef + (1 | Coef.adj1) + (1 | Coef.adj2), data=dfData)
+summary(fit.lme2)
+
 
 fit.lme2 = lmer(values ~ 1  + (1 | Coef) + (1 | Coef.adj1), data=dfData)
 summary(fit.lme2)
