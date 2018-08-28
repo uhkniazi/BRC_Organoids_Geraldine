@@ -40,3 +40,6 @@ rsconnect/
 *.Rproj
 temp/
 *.rds
+dataExternal/*
+results/*
+scratch.R
